@@ -1,0 +1,16 @@
+[package]
+name = "unicode-fetcher"
+version = "0.1.0"
+authors = ["Malakai Smith <hello@malakai.net>"]
+edition = "2024"
+description = "Lightweight fetcher utility for unicode data files."
+license = "MPL-2.0"
+
+[dependencies]
+ureq = { version = "3", optional = true }
+sha2 = { version = "0.11", optional = true }
+
+[features]
+default = []
+https = ["dep:ureq"]
+checksum = ["dep:sha2"]
