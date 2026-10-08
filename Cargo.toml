@@ -6,6 +6,9 @@ edition = "2024"
 description = "Lightweight fetcher utility for unicode data files."
 license = "MPL-2.0"
 
+[lib]
+name = "unifetch"
+
 [dependencies]
 ureq = { version = "3", optional = true }
 sha2 = { version = "0.11", optional = true }

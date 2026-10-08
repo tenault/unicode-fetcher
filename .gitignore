@@ -1,0 +1,10 @@
+# [ rust ]
+# ..general
+debug
+target
+
+# ..rustfmt backup files
+**/*.rs.bk
+
+# ..rustc stack trace dumps (internal compiler error)
+rustc-ice-*.txt

@@ -1,5 +1,5 @@
 //
-// unicode-fetch .................. src/lib.rs
+// unicode-fetcher ................ src/lib.rs
 // copyright (c) 2026 malakai smith (@tenault)
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
@@ -37,7 +37,7 @@ pub type FetchResult<T> = Result<T, FetchError>;
 // [[    UNICODE FETCHER    ]]
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-// ~~~~~ FETCHER ~~~~~
+// ~~~~~ FETCHER STRUCT ~~~~~
 
 #[derive(Clone, Debug)]
 pub struct Fetcher {
@@ -99,14 +99,13 @@ impl Fetcher {
 
         // ..... prevent traversal .....
 
-        let root = safe_root(&self.root)?;
         let dir  = safe_path(dir)?;
         let file = safe_path(file)?;
 
         // ..... check for existing target .....
 
         let (subdir, name) = get_unicode_path(&file);
-        let dest = root.join(&dir).join(&name);
+        let dest = &self.root.join(&dir).join(&name);
 
         if self.file_exists(&dest) { return read_file(&dest); }
 
@@ -301,7 +300,7 @@ fn get_hash(path: &Path) -> FetchResult<String> {
     hasher.update(&data);
     let result = hasher.finalize();
 
-    Ok(format!("{:?}", result))
+    Ok(format!("{:x}", result))
 }
 
 // ~~~~~ INTERNET ~~~~~
@@ -403,29 +402,26 @@ fn wget(url: &str, dest: &Path) -> bool {
 
 // ~~~~~ PATHS ~~~~~
 
-/// Validate the root path has no traversal components.
-fn safe_root(root: &Path) -> FetchResult<PathBuf> {
-    for component in root.components() {
-        match component {
-            Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                return Err(FetchError::UnsafePath(root.to_string_lossy().into_owned()));
-            },
-            Component::CurDir | Component::Normal(_) => { /* path is safe */ },
-        }
-    }
-
-    Ok(root.to_path_buf())
-}
-
-/// Validate that a given path has no traversal components.
+/// Validate that a given path has no traversal components, removing empty seperators.
 fn safe_path(path: &str) -> FetchResult<String> {
-    let test = path.replace('\\', "/");
-
-    if test.is_empty() || test.starts_with('/') || test.contains(":/") {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with("\\\\")
+        || path.contains(":/")
+        || path.contains(":\\") {
         return Err(FetchError::UnsafePath(path.to_string()));
     }
 
-    let clone = Path::new(&test);
+    let safe = path
+        .replace('\\', "/")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if safe.is_empty() { return Err(FetchError::UnsafePath(path.to_string())); }
+
+    let clone = Path::new(&safe);
     for component in clone.components() {
         match component {
             Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
@@ -435,7 +431,7 @@ fn safe_path(path: &str) -> FetchResult<String> {
         }
     }
 
-    Ok(test)
+    Ok(safe)
 }
 
 /// Validate that a given version is in the correct format.
@@ -566,4 +562,131 @@ impl error::Error for FetchError {
             _ => None,
         }
     }
+}
+
+
+// ~~~~~~~~~~~~~~~~~
+// [[    TESTS    ]]
+// ~~~~~~~~~~~~~~~~~
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ~~~~~ PATHS ~~~~~
+
+    #[test]
+    fn safe_path_approves_valid_paths() {
+        assert!(safe_path("tmp/unicode").is_ok());
+        assert!(safe_path("./data").is_ok());
+        assert!(safe_path("some/deep/nested/subdir").is_ok());
+    }
+
+    #[test]
+    fn safe_path_rejects_invalid_paths() {
+        assert!(safe_path("../escape").is_err());
+        assert!(safe_path("/absolute/path").is_err());
+        assert!(safe_path("C:\\Windows").is_err());
+        assert!(safe_path("hidden/../escape").is_err());
+        assert!(safe_path("\\\\server\\share").is_err());
+        assert!(safe_path("/").is_err());
+        assert!(safe_path("\\").is_err());
+    }
+
+    #[test]
+    fn safe_path_converts_backslashes() {
+        assert_eq!(safe_path("some\\\\file.txt").unwrap(), "some/file.txt");
+    }
+
+    // ~~~~~ VERSIONS ~~~~~
+
+    #[test]
+    fn safe_version_converts_latest() { assert_eq!(safe_version("latest").unwrap(), "UCD/latest"); }
+
+    #[test]
+    fn safe_version_accepts_valid_versions() {
+        assert_eq!(safe_version("18.0.0").unwrap(), "18.0.0");
+        assert_eq!(safe_version("15.3.2").unwrap(), "15.3.2");
+        assert_eq!(safe_version("1.0.0").unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn safe_version_rejects_invalid_versions() {
+        assert!(safe_version("18").is_err());
+        assert!(safe_version("18.0").is_err());
+        assert!(safe_version("18.0.0.0").is_err());
+        assert!(safe_version("abc.def.ghi").is_err());
+        assert!(safe_version("18..0").is_err());
+        assert!(safe_version("").is_err());
+    }
+
+    // ~~~~~ URL BUILDER ~~~~~
+
+    #[test]
+    fn build_url_accepts_no_subdir() {
+        let url = build_url("18.0.0", "", "UnicodeData.txt").unwrap();
+        assert_eq!(url, "https://unicode.org/Public/18.0.0/ucd/UnicodeData.txt");
+    }
+
+    #[test]
+    fn build_url_accepts_subdir() {
+        let url = build_url("latest", "emoji", "emoji-data.txt").unwrap();
+        assert_eq!(url, "https://unicode.org/Public/UCD/latest/ucd/emoji/emoji-data.txt");
+    }
+
+    #[test]
+    fn build_url_rejects_invalid_version() {
+        assert!(build_url("invalid", "", "DerivedLineBreak.txt").is_err());
+    }
+
+    // ~~~~~ UNICODE PATH EXTRACTION ~~~~~
+
+    #[test]
+    fn get_unicode_path_extracts_explicit_subdir() {
+        let (subdir, name) = get_unicode_path("auxiliary/GraphemeBreakTest.txt");
+        assert_eq!(subdir, "auxiliary");
+        assert_eq!(name, "GraphemeBreakTest.txt");
+    }
+
+    #[test]
+    fn get_unicode_path_extracts_auxiliary() {
+        assert_eq!(get_unicode_path("WordBreakTest.txt"), ("auxiliary", "WordBreakTest.txt"));
+        assert_eq!(get_unicode_path("LineBreakTest.txt"), ("auxiliary", "LineBreakTest.txt"));
+    }
+
+    #[test]
+    fn get_unicode_path_extracts_extracted() {
+        assert_eq!(get_unicode_path("DerivedLineBreak.txt"), ("extracted", "DerivedLineBreak.txt"));
+        assert_eq!(get_unicode_path("DerivedBidiClass.txt"), ("extracted", "DerivedBidiClass.txt"));
+    }
+
+    #[test]
+    fn get_unicode_path_extracts_emoji() {
+        assert_eq!(get_unicode_path("emoji-test.txt"), ("emoji", "emoji-test.txt"));
+    }
+
+    #[test]
+    fn get_unicode_path_does_not_force_subdir() {
+        assert_eq!(get_unicode_path("UnicodeData.txt"), ("", "UnicodeData.txt"));
+    }
+
+    // ~~~~~ FETCHER ~~~~~
+
+    #[test]
+    fn fetcher_builds_with_root() {
+        let fetcher = Fetcher::with_root("some/local/subdir");
+        assert_eq!(fetcher.version, "latest");
+        assert!(fetcher.cache_lifetime.is_none());
+    }
+
+    #[test]
+    fn fetcher_builds_with_chaining() {
+        let fetcher = Fetcher::with_root("some/local/subdir")
+            .with_version("18.0.0")
+            .with_cache_lifetime(Duration::from_secs(3600));
+
+        assert_eq!(fetcher.version, "18.0.0");
+        assert!(fetcher.cache_lifetime.is_some());
+    }
+
 }
